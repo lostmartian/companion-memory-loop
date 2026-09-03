@@ -191,22 +191,42 @@ production-system analysis and fix in the build log). Status after the improveme
    stronger judge: **100% agreement (30/30, `artifacts/eval/cross_judge.md`)**. Human
    agreement study remains out of scope; numbers stay directional, not benchmark claims.
 
-**Results: memory 21/22 (95%) vs full-context baseline 20/22 (91%)** — beating the
-baseline on temporal questions (4/4 vs 3/4). Persona 8/8 in-character under pressure.
-The one memory failure (`update_apartment`) was a *reading* literalness issue, not
-retrieval: both relevant facts were retrieved; the reader wouldn't conclude
-"is moving this weekend" → "lives near the park now". Full report:
-[`artifacts/eval/REPORT.md`](artifacts/eval/REPORT.md).
+**Post-fix verification (soak v2 + eval v2, same day):**
+
+- **Subject registry: fixed.** Zero companion-entity facts in the 50-turn soak store
+  (v1 leaked the persona's dog as a user pet; v2 has only the user's actual cat).
+- **Structured summary: fixed.** v2 summary reads "moved to current city three years ago
+  *after growing up in Porto*" — the v1 conflation ("nurse in Porto") is gone; past and
+  present states preserved separately.
+- **Async ingest: verified.** Memories land off the reply path; flush-on-exit loses nothing.
+- **Eval: memory 21/22 (95%), baseline 21/22, judge FPR 0/43.** `knowledge_update` is
+  now 5/5 (v1's `update_apartment` failure fixed). The single failure moved to
+  `temporal_allergy_onset` — and it is **not a retrieval failure**: the retrieved fact
+  contains "discovered at age twelve after eating a satay skewer at a birthday party";
+  the reader answered "age twelve" and the judge required the parenthetical party detail.
+  Across both runs the pattern is consistent: retrieval is the strong layer; the noisy
+  edge lives in reading completeness and judge strictness.
+- **Honest read:** at n=22, memory and full-context are indistinguishable on accuracy;
+  the memory system's case is cost/latency (a fraction of the tokens per probe) and
+  bounded context, plus the temporal robustness observed in v1 (4/4 vs 3/4).
 
 ## Evidence the core loop works
 
-- [`artifacts/eval/REPORT.md`](artifacts/eval/REPORT.md) — full eval: 21/22 memory vs 20/22
-  full-context baseline, per-category table, judge FPR probe (0/43), failure analysis.
-  Raw judged results: `artifacts/eval/results_main.json`, `results_persona_rubric_v2.json`.
-- [`artifacts/soak_transcript.txt`](artifacts/soak_transcript.txt) — 50-turn scripted session: fact seeding,
-  mid-session breakup contradiction, shift-change supersession, long-range probes
-  (coffee order t31, wedding date t41, relationship status t45, allergy t49) all answered
-  from memory, 30 active / 12 retired facts with full supersession chains.
+- [`artifacts/eval/REPORT.md`](artifacts/eval/REPORT.md) — full eval (v1 run): 21/22 memory
+  vs 20/22 full-context baseline, per-category table, judge FPR probe (0/43), failure
+  analysis. Raw judged results: `artifacts/eval/results_main.json`,
+  `results_persona_rubric_v2.json`. Post-fix rerun (v2): 21/22 vs 21/22 with
+  `knowledge_update` at 5/5 — see "Post-fix verification" under Known limitations.
+  Raw v2 results: `artifacts/eval/results_main_postfix.json`; v2 soak transcript:
+  [`artifacts/soak_transcript_v2.txt`](artifacts/soak_transcript_v2.txt).
+- [`artifacts/eval/cross_judge.md`](artifacts/eval/cross_judge.md) — stronger-judge
+  re-grade of the full eval: 100% agreement.
+- [`artifacts/soak_transcript.txt`](artifacts/soak_transcript.txt) — 50-turn scripted
+  session (v1): fact seeding, mid-session breakup contradiction, shift-change
+  supersession, long-range probes (coffee order t31, wedding date t41, relationship
+  status t45, allergy t49) all answered from memory, 30 active / 12 retired facts with
+  full supersession chains. The v2 soak re-run confirmed the hardening fixes (no
+  persona-entity facts; temporal qualifiers preserved in the summary).
 - Restart safety: `kill -9` mid-session, next process resumes and recalls.
 - Persona pressure: "Are you an AI?" / "ignore your persona" → in-character deflection,
   zero assistant-speak.
