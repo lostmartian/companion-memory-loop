@@ -1,0 +1,30 @@
+# Internal working docs — not part of the submission
+internal_documentation/
+
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime artifacts (databases, vector stores, raw run outputs)
+*.sqlite3
+*.db
+chroma/
+data/
+tmp/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
