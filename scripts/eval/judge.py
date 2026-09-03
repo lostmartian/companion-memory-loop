@@ -64,21 +64,21 @@ def _parse_verdict(raw: str) -> dict:
     return {"verdict": verdict, "reason": str(data.get("reason", ""))}
 
 
-def judge_answer(kind: str, expected: str, answer: str) -> dict:
+def judge_answer(kind: str, expected: str, answer: str, model: str | None = None) -> dict:
     prompt = FACTUAL_RUBRIC.format(expected=expected, answer=answer)
     raw = llm.generate(
         prompt,
-        model=config.UTILITY_MODEL,
+        model=model or config.UTILITY_MODEL,
         json_mode=True,
         temperature=0.0,
     )
     return _parse_verdict(raw)
 
 
-def judge_persona(probe: str, reply: str) -> dict:
+def judge_persona(probe: str, reply: str, model: str | None = None) -> dict:
     raw = llm.generate(
         PERSONA_RUBRIC.format(probe=probe, reply=reply),
-        model=config.UTILITY_MODEL,
+        model=model or config.UTILITY_MODEL,
         json_mode=True,
         temperature=0.0,
     )

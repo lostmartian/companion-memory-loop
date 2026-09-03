@@ -38,6 +38,25 @@ def is_pressure_turn(user_input: str) -> bool:
     return any(re.search(p, lowered) for p in PRESSURE_PATTERNS)
 
 
+COMPANION_ENTITIES = frozenset(
+    {"milo", "biscuit", "companion", "assistant", "the station", "the radio station"}
+)
+
+POSSESSION_PREDICATES = frozenset(
+    {"has_pet", "has_dog", "has_cat", "owns", "has", "adopted", "has_pet_named"}
+)
+
+
+def is_companion_owned(fact_subject: str, fact_predicate: str, fact_object: str) -> bool:
+    subject = fact_subject.strip().lower()
+    obj = fact_object.strip().lower()
+    if subject in COMPANION_ENTITIES:
+        return True
+    if fact_predicate.strip().lower() in POSSESSION_PREDICATES and obj in COMPANION_ENTITIES:
+        return True
+    return False
+
+
 def load_persona() -> str:
     return config.PERSONA_CARD_PATH.read_text()
 

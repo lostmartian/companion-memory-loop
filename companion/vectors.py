@@ -38,9 +38,11 @@ def embed_query(text: str) -> list[float]:
     return _embed([text], "RETRIEVAL_QUERY")[0]
 
 
-def upsert_fact(fact_id: int, text: str, metadata: dict | None = None) -> None:
+def upsert_fact(
+    fact_id: int, text: str, metadata: dict | None = None, embed_text: str | None = None
+) -> None:
     collection = get_collection()
-    embedding = embed_documents([text])[0]
+    embedding = embed_documents([embed_text or text])[0]
     collection.upsert(
         ids=[str(fact_id)],
         embeddings=[embedding],

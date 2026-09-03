@@ -20,6 +20,16 @@ def canned_summary(text):
     return fake_generate
 
 
+STRUCTURED = json.dumps(
+    {
+        "current_state": "User is a nurse on day shifts, grew up in Porto, lives near the park now.",
+        "open_threads": ["April half marathon", "wedding toast"],
+        "emotional_context": "recovering from a breakup, optimistic",
+        "last_exchange": "discussed the toast structure",
+    }
+)
+
+
 def test_no_compaction_under_threshold(store):
     store.add_turn("s", "user", "hi")
     store.add_turn("s", "assistant", "hello")
@@ -27,20 +37,29 @@ def test_no_compaction_under_threshold(store):
 
 
 def test_compacts_turns_older_than_window(store, monkeypatch):
-    monkeypatch.setattr(
-        "companion.compaction.llm.generate",
-        canned_summary("User had a long hospital shift and talked about sister Anna's wedding."),
-    )
+    monkeypatch.setattr("companion.compaction.llm.generate", canned_summary(STRUCTURED))
     for i in range(14):
         store.add_turn("s", "user" if i % 2 == 0 else "assistant", f"msg {i}")
     summary = compaction.compact_if_needed(store, "s")
     assert summary is not None
-    assert "Anna" in summary
+    assert "grew up in Porto" in summary
+    assert "lives near the park" in summary
+    assert "wedding toast" in summary
     stored, until = store.get_summary("s")
     assert stored == summary
     turns = store.get_turns("s")
     recent_ids = {t["id"] for t in turns[-8:]}
     assert until not in recent_ids
+
+
+def test_prose_fallback_when_unparseable(store, monkeypatch):
+    monkeypatch.setattr(
+        "companion.compaction.llm.generate", canned_summary("plain prose summary")
+    )
+    for i in range(14):
+        store.add_turn("s", "user" if i % 2 == 0 else "assistant", f"msg {i}")
+    summary = compaction.compact_if_needed(store, "s")
+    assert summary == "plain prose summary"
 
 
 def test_second_compaction_only_folds_new_turns(store, monkeypatch):

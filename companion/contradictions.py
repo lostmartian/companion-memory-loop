@@ -18,6 +18,11 @@ Rules:
 - Judge information, not wording. "I broke up with Sam" SUPERSEDES "User is dating Sam".
 - "User works as a nurse" vs "User works as a nurse at city hospital" — the more detailed
   one SUPERSEDES the vaguer one if stored; otherwise they are DUPLICATE-level info.
+- RECOUNTS ARE NOT NEW STATES: if the new fact recalls, asks about, or re-tells something
+  already known ("like I said, I dated Sam", "remember my breakup"), it is DUPLICATE of
+  the matching stored fact when consistent with it, and UNRELATED otherwise. Only
+  present-tense announcements of a new state supersede ("Sam and I broke up" after
+  dating facts; "I switched to day shifts" after night-shift facts).
 - When in doubt between DUPLICATE and UNRELATED, choose DUPLICATE only if a person reading
   both would learn nothing new from the second one.
 - Never invent ids. Only judge ids from the EXISTING FACTS list.
@@ -78,7 +83,23 @@ def find_candidates(store: Store, new_fact: Fact, k: int = 3) -> list:
     return unique
 
 
+QUESTION_STARTERS = (
+    "what ", "when ", "where ", "who ", "why ", "how ", "do i ", "did i ", "am i ",
+    "is my ", "was i ", "can you remind", "remember",
+)
+
+
+def looks_like_recount(text: str) -> bool:
+    lowered = text.strip().lower()
+    if lowered.endswith("?"):
+        return True
+    return any(lowered.startswith(s) for s in QUESTION_STARTERS)
+
+
 def process_fact(store: Store, fact: Fact, source_turn: int | None = None) -> str:
+    if looks_like_recount(fact.text):
+        return "SKIPPED_RECOUNT"
+
     candidates = find_candidates(store, fact)
     if not candidates:
         extract.commit_fact(store, fact, source_turn=source_turn)

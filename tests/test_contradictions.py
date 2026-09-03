@@ -135,3 +135,21 @@ def test_malformed_verdict_defaults_to_new(store, monkeypatch):
     action = contradictions.process_fact(s, fact("User moved to Lisbon."))
     assert action == "NEW"
     assert len(s.get_active()) == 2
+
+
+def test_recount_question_skipped_without_llm(store, monkeypatch):
+    s, fake = store
+    contradictions.process_fact(s, fact())
+    fid = s.get_active()[0]["id"]
+
+    def explode(*args, **kwargs):
+        raise AssertionError("classifier should not run for recounts")
+
+    monkeypatch.setattr("companion.contradictions.llm.generate", explode)
+    monkeypatch.setattr(
+        "companion.vectors.query_similar", lambda *a, **kw: [(fid, 0.1)]
+    )
+
+    assert contradictions.process_fact(s, fact("Did I mention I am dating Sam?")) == "SKIPPED_RECOUNT"
+    assert contradictions.process_fact(s, fact("Remember I dated Sam?")) == "SKIPPED_RECOUNT"
+    assert len(s.get_active()) == 1

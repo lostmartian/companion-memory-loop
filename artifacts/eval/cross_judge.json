@@ -1,0 +1,7 @@
+{
+  "model": "gemini-3.1-pro-preview",
+  "factual_agreement": "22/22",
+  "persona_agreement": "8/8",
+  "disagreements": [],
+  "generated": "2026-09-03T16:47:27.450894"
+}

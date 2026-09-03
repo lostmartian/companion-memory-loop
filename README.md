@@ -81,7 +81,7 @@ uv run python -m companion.loop tour
 ## Tests, soak, eval
 
 ```bash
-uv run pytest -q                                     # 41 unit tests, no API key needed
+uv run pytest -q                                     # 50 unit tests, no API key needed
 uv run python scripts/soak_test.py --session soak2   # 50-turn scripted stress run (~7 min, uses API)
 uv run python scripts/eval/run_eval.py               # 30-scenario eval (~20 min, uses API)
 uv run python scripts/eval/report.py artifacts/eval/results_main.json \
@@ -146,6 +146,10 @@ relationship facts, the old facts are retired, not argued with.
 | Persona re-grounding on drift-prone turns | Regex detector for identity probes / override attempts appends a hard reminder. Cheap (no extra LLM call), effective in pressure tests. |
 | Compaction watermark (`summarized_until_turn`) | Only *new* turns older than the window get folded into the rolling summary; no repeated summarization cost. |
 | `chat_turn()` shared by CLI and soak test | The eval/stress path exercises the *exact* production pipeline, not a parallel implementation. |
+| Per-session background ingest queue (`ingest.py`) | Extraction/contradiction runs off the reply path (Zep-style async ingestion): ordered per-session writes, own SQLite connection per worker, flush-on-exit so nothing is lost, error-resilient per task. |
+| Key expansion at index time | Each fact carries LLM-generated recall phrases (`search_keys`) — embedded and FTS-indexed. LongMemEval's finding: fixing recall at index time beats runtime heuristics and costs no query-time latency. |
+| Subject registry for extraction | Companion entities excluded at schema level (`validate_subjects`), not just prompted — the Zep/Letta lesson that identity scoping must be structural. |
+| Structured compaction summary | current_state / open_threads / emotional_context / last_exchange with temporal-qualifier rules; lossy-by-design but bounded, and facts remain the recall source of truth. |
 | Model routing: one model (`gemini-3.8-flash`) for chat, extraction, classification, judging | Simple to reason about; extraction runs per turn so cost-sensitive routing matters less at this scale. |
 
 ### What was tried and abandoned
@@ -164,35 +168,35 @@ relationship facts, the old facts are retired, not argued with.
 
 ### Known limitations
 
-1. **Subject confusion under semantic similarity.** The persona's dog ("Biscuit")
-   once leaked into user facts because extraction ran against a context window that
-   mentioned him. Extraction prompt says "ignore the companion's persona", but it is
-   prompt-enforced, not guaranteed. A subject-validation pass would fix it.
-2. **Compaction is lossy.** The rolling summary once wrote "nurse in Porto" — conflating
-   "grew up in Porto" with "lives here". Facts survive; only the summary blurs.
-   Mitigation: facts are the source of truth for recall, the summary is only filler context.
-3. **Retrieval is embedding-bounded.** No reranker; recall relies on `gemini-embedding-001`
-   top-k ∪ FTS5. Fine at <100 facts; a reranker (or key expansion à la LongMemEval) is the
-   next lever.
-4. **Extraction adds latency after each reply** (one extra LLM call). Not hidden from the
-   user because it happens post-reply, but it serializes the next turn.
-5. **Contradiction classifier trusts recency.** "I've been dating Sam again" correctly
-   supersedes a breakup fact, but a *re-telling* of old news ("remember I dated Sam?")
-   risks being classified as a new relationship. Probe-style past-tense phrasing mostly
-   avoids this; a tense/aspect check would harden it.
-6. **Eval harness: built, small, honest.** 30 scenarios across LongMemEval-style categories
-   (recall / temporal / multi-session / knowledge-update / abstention) + persona-pressure
-   probes, each scenario in an isolated store. Results: **memory system 21/22 (95%)** vs
-   **full-context baseline 20/22 (91%)** — and it beats the baseline on temporal questions
-   (4/4 vs 3/4) because bi-temporal facts read more reliably than raw transcripts. Persona
-   8/8 in-character under identity/override pressure. The judge was validated
-   adversarially: **0/43 false positives** on intentionally-wrong-but-topically-adjacent
-   answers (the LoCoMo failure mode). Limitations of the judge: single-model
-   self-grading, no human agreement study, one false-negative caught and fixed under
-   rubric v2 (both numbers reported). Full report: [`artifacts/eval/REPORT.md`](artifacts/eval/REPORT.md).
-   The one memory failure (`update_apartment`) was a *reading* literalness issue, not
-   retrieval: both relevant facts were retrieved; the reader wouldn't conclude
-   "is moving this weekend" → "lives near the park now".
+Six limitations were identified after the first full build (each documented with its
+production-system analysis and fix in the build log). Status after the improvement pass:
+
+1. **Subject confusion** — fixed via a subject registry: companion entities are excluded
+   at the schema level (`validate_subjects`), not just prompted away. Residual risk:
+   novel companion-entity names not in the registry.
+2. **Compaction lossy** — mitigated via a structured summary template
+   (current_state / open_threads / emotional_context / last_exchange) with explicit
+   temporal-qualifier rules. Inherent lossiness remains; facts (not the summary) are the
+   recall source of truth.
+3. **Retrieval embedding-bounded** — improved via **key expansion at index time** (each
+   fact carries LLM-generated recall phrases, embedded and FTS-indexed, zero extra
+   calls). A cross-encoder reranker remains the unimplemented next lever.
+4. **Extraction latency** — fixed via per-session background ingest queue (ordered writes,
+   flush-on-exit, error-resilient worker). Residual risk: a memory extracted for turn N
+   lands before turn N+2 rather than N+1 if the user replies instantly.
+5. **Classifier trusts recency** — fixed with a recounts-are-not-new-states rubric rule +
+   a structural guard (interrogative/recount-shaped texts can never write memory).
+   Deeper fix (event-vs-state schema, Graphiti-style) remains future work.
+6. **Judge reliability** — validated adversarially (0/43 FPR) and cross-validated with a
+   stronger judge: **100% agreement (30/30, `artifacts/eval/cross_judge.md`)**. Human
+   agreement study remains out of scope; numbers stay directional, not benchmark claims.
+
+**Results: memory 21/22 (95%) vs full-context baseline 20/22 (91%)** — beating the
+baseline on temporal questions (4/4 vs 3/4). Persona 8/8 in-character under pressure.
+The one memory failure (`update_apartment`) was a *reading* literalness issue, not
+retrieval: both relevant facts were retrieved; the reader wouldn't conclude
+"is moving this weekend" → "lives near the park now". Full report:
+[`artifacts/eval/REPORT.md`](artifacts/eval/REPORT.md).
 
 ## Evidence the core loop works
 
@@ -216,16 +220,17 @@ companion/
   store.py           SQLite bi-temporal store + FTS5 + turns + summaries
   vectors.py         gemini-embedding-001 ↔ Chroma index
   llm.py             Gemini clients (streaming + JSON mode)
-  extract.py         fact extraction pipeline
+  extract.py         fact extraction pipeline (subject registry + search keys)
   contradictions.py  classify NEW / SUPERSEDES / DUPLICATE, retire old
-  retrieve.py        hybrid retrieval (vector ∪ FTS5, recency boost)
-  compaction.py      rolling conversation summary with watermark
+  ingest.py          per-session background ingest queue
+  retrieve.py        hybrid retrieval (vector ∪ FTS5 + search keys, recency boost)
+  compaction.py      structured rolling summary with watermark
   persona.py         drift-prone turn detector + grounding reminder
   loop.py            terminal chat loop + chat_turn() used by tests/eval
 persona/card.md      Milo's persona definition
 scripts/soak_test.py 50-turn stress run
-scripts/eval/        scenarios.py · judge.py · run_eval.py · report.py
-tests/               41 unit tests
+scripts/eval/        scenarios.py · judge.py · run_eval.py · report.py · cross_judge.py
+tests/               50 unit tests
 artifacts/           tracked evidence: soak transcript + eval report/results
 ```
 

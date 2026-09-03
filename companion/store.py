@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS facts (
     text TEXT NOT NULL,
     category TEXT NOT NULL DEFAULT 'other',
     entities TEXT NOT NULL DEFAULT '[]',
+    keywords TEXT NOT NULL DEFAULT '[]',
     confidence REAL NOT NULL DEFAULT 1.0,
     valid_from TEXT NOT NULL,
     valid_to TEXT,
@@ -41,17 +42,19 @@ CREATE TABLE IF NOT EXISTS session_summaries (
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS fts_facts USING fts5(
-    text, subject, predicate, object, content='facts', content_rowid='id'
+    text, subject, predicate, object, keywords, content='facts', content_rowid='id'
 );
 CREATE TRIGGER IF NOT EXISTS facts_ai AFTER INSERT ON facts BEGIN
-    INSERT INTO fts_facts(rowid, text, subject, predicate, object)
-    VALUES (new.id, new.text, new.subject, new.predicate, new.object);
+    INSERT INTO fts_facts(rowid, text, subject, predicate, object, keywords)
+    VALUES (new.id, new.text, new.subject, new.predicate, new.object, new.keywords);
 END;
 CREATE TRIGGER IF NOT EXISTS facts_ad AFTER DELETE ON facts BEGIN
-    INSERT INTO fts_facts(fts_facts, rowid, text, subject, predicate, object)
-    VALUES ('delete', old.id, old.text, old.subject, old.predicate, old.object);
+    INSERT INTO fts_facts(fts_facts, rowid, text, subject, predicate, object, keywords)
+    VALUES ('delete', old.id, old.text, old.subject, old.predicate, old.object, old.keywords);
 END;
 """
+
+FTS_COLUMNS = ["text", "subject", "predicate", "object", "keywords"]
 
 
 def utcnow() -> str:
@@ -65,7 +68,24 @@ class Store:
         self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self.conn.commit()
+
+    def _migrate(self) -> None:
+        col = self.conn.execute("PRAGMA table_info(facts)").fetchall()
+        names = {row["name"] if "name" in row.keys() else row[1] for row in col}
+        if "keywords" not in names:
+            self.conn.execute("ALTER TABLE facts ADD COLUMN keywords TEXT NOT NULL DEFAULT '[]'")
+        row = self.conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='fts_facts'"
+        ).fetchone()
+        fts_sql = row["sql"] if row else ""
+        if row and "keywords" not in fts_sql:
+            self.conn.execute("DROP TRIGGER IF EXISTS facts_ai")
+            self.conn.execute("DROP TRIGGER IF EXISTS facts_ad")
+            self.conn.execute("DROP TABLE fts_facts")
+            self.conn.executescript(SCHEMA)
+            self.conn.execute("INSERT INTO fts_facts(fts_facts) VALUES('rebuild')")
 
     def close(self) -> None:
         self.conn.close()
@@ -79,6 +99,7 @@ class Store:
         text: str,
         category: str = "other",
         entities: list[str] | None = None,
+        keywords: list[str] | None = None,
         confidence: float = 1.0,
         observed_at: str | None = None,
         source_turn: int | None = None,
@@ -87,9 +108,9 @@ class Store:
         cur = self.conn.execute(
             """
             INSERT INTO facts (
-                subject, predicate, object, text, category, entities, confidence,
+                subject, predicate, object, text, category, entities, keywords, confidence,
                 valid_from, valid_to, status, superseded_by, observed_at, recorded_at, source_turn
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'active', NULL, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'active', NULL, ?, ?, ?)
             """,
             (
                 subject,
@@ -98,6 +119,7 @@ class Store:
                 text,
                 category,
                 json.dumps(entities or []),
+                json.dumps(keywords or []),
                 confidence,
                 observed_at or now,
                 now,

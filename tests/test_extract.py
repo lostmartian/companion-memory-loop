@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from companion import extract
+from companion import extract, vectors
 from companion.schema import Fact
 from companion.store import Store
 
@@ -130,3 +130,69 @@ def test_commit_fact_writes_both_stores(store, monkeypatch):
     facts = extract.extract_facts("I've been a nurse for three years")
     fid = extract.commit_fact(store, facts[0])
     assert store.get_active()[0]["id"] == fid
+
+
+def test_companion_subject_facts_dropped(store, monkeypatch):
+    monkeypatch.setattr(
+        "companion.extract.llm.generate",
+        canned(
+            [
+                {
+                    "subject": "Milo",
+                    "predicate": "has_pet",
+                    "object": "Biscuit",
+                    "text": "Milo has a dog named Biscuit.",
+                },
+                {
+                    "subject": "user",
+                    "predicate": "likes",
+                    "object": "radio",
+                    "text": "User likes the radio.",
+                },
+            ]
+        ),
+    )
+    facts = extract.extract_facts("Milo's dog sounds nice, and I love the radio")
+    assert len(facts) == 1
+    assert facts[0].subject == "user"
+
+
+def test_companion_possession_leak_dropped(store, monkeypatch):
+    monkeypatch.setattr(
+        "companion.extract.llm.generate",
+        canned(
+            [
+                {
+                    "subject": "user",
+                    "predicate": "has_pet",
+                    "object": "Biscuit",
+                    "text": "User has a pet named Biscuit.",
+                }
+            ]
+        ),
+    )
+    facts = extract.extract_facts("I have a pet named Biscuit")
+    assert facts == []
+
+
+def test_search_keys_stored_and_embedded(store, monkeypatch):
+    monkeypatch.setattr(
+        "companion.extract.llm.generate",
+        canned(
+            [
+                {
+                    "subject": "user",
+                    "predicate": "has_event",
+                    "object": "June 14th",
+                    "text": "Anna's wedding is on June 14th.",
+                    "search_keys": ["when is anna's wedding", "wedding date"],
+                }
+            ]
+        ),
+    )
+    facts = extract.extract_facts("Anna's wedding is June 14th!")
+    fid = extract.commit_fact(store, facts[0])
+    row = store.get_fact(fid)
+    assert json.loads(row["keywords"]) == ["when is anna's wedding", "wedding date"]
+    assert "when is anna's wedding" in extract.fact_embed_text(facts[0])
+    assert str(fid) in vectors.get_collection().items

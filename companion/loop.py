@@ -5,6 +5,7 @@ from rich.console import Console
 
 from companion import compaction, config, extract, llm, retrieve
 from companion.contradictions import process_fact
+from companion.ingest import IngestWorker
 from companion.persona import grounding_block, is_pressure_turn, load_persona
 from companion.store import Store
 
@@ -36,6 +37,7 @@ def chat_turn(
     user_input: str,
     persona: str,
     out=console,
+    worker=None,
 ) -> str:
     store.add_turn(session_id, "user", user_input)
 
@@ -75,10 +77,15 @@ def chat_turn(
         store.add_turn(session_id, "assistant", reply)
 
     recent = [t["content"] for t in store.get_turns(session_id, limit=4)]
-    facts = extract.extract_facts(user_input, recent_context="\n".join(recent[:-1]))
-    for f in facts:
-        action = process_fact(store, f, source_turn=store.count_turns(session_id))
-        out.print(f"  [dim]memory ({action}): {f.text}[/dim]")
+    context = "\n".join(recent[:-1])
+    source_turn = store.count_turns(session_id)
+    if worker is not None:
+        worker.submit(user_input, context, source_turn)
+    else:
+        facts = extract.extract_facts(user_input, recent_context=context)
+        for f in facts:
+            action = process_fact(store, f, source_turn=source_turn)
+            out.print(f"  [dim]memory ({action}): {f.text}[/dim]")
 
     return reply
 
@@ -86,6 +93,7 @@ def chat_turn(
 def run(session_id: str = "main") -> None:
     store = Store(config.DB_PATH)
     persona = load_persona()
+    worker = IngestWorker(config.DB_PATH, console)
     prior = store.count_turns(session_id)
     if prior:
         console.print(f"[dim]Resuming session '{session_id}' ({prior} prior turns)[/dim]")
@@ -105,8 +113,10 @@ def run(session_id: str = "main") -> None:
                 console.print(f"  [dim]#{row['id']}[/dim] {row['text']}")
             continue
 
-        chat_turn(store, session_id, user_input, persona, console)
+        chat_turn(store, session_id, user_input, persona, console, worker=worker)
 
+    worker.flush()
+    worker.stop()
     store.close()
     console.print("[dim]bye — memories saved.[/dim]")
 
